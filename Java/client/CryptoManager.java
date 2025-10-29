@@ -31,13 +31,10 @@ public class CryptoManager {
     private SecretKey sKey; //Encryption
     private SecretKey hmac; //Authentication
     private boolean hasHmac = false;
-    
     private String clienteId; //ID do cliente para identificar a key
     private char[] pwd;
-
     private static final int GCM_IV_LENGTH = 12;    // 96 bits
     private static final int GCM_TAG_LENGTH = 16;   //128 bits
-
     private final String KEY_DIR = "Java/client/KeyStore/"; //Diretoria para guardar a chave
     private static final int PBKDF2_ITERATIONS = 65536;
     private static final int PBKDF2_KEY_LENGTH = 256;
@@ -53,7 +50,7 @@ public class CryptoManager {
         secureRandom = new SecureRandom();
         try {
             loadFile();
-            File keyFile = new File(KEY_DIR + this.clienteId + "_enc.key");//Verificar se a key ja existe
+            File keyFile = new File(KEY_DIR + this.clienteId + "~" + algorithm +"~enc.key");//Verificar se a key ja existe
             if(!keyFile.exists()){
                 createKey();
                 storeKey();
@@ -100,14 +97,14 @@ public class CryptoManager {
     }
     private void createKey() throws NoSuchAlgorithmException{
         switch(algorithm){
-            case "AES/GCM":
+            case "AES GCM":
                 //Generate AES key
                 KeyGenerator kg = KeyGenerator.getInstance("AES");
                 kg.init(key,secureRandom);
                 sKey = kg.generateKey();
                 System.out.println("Generated AES key of size " + key + " bits.");
                 break;
-            case "AES/CBC/PKCS5Padding":
+            case "AES CBC PKCS5Padding":
                 //Generate AES key
                 KeyGenerator a = KeyGenerator.getInstance("AES");
                 a.init(key,secureRandom);
@@ -119,7 +116,7 @@ public class CryptoManager {
                 System.out.println("Generated AES key of size " + key + " bits.");
                 System.out.println("Generated HMAC key of size " + key + " bits.");
                 break;
-            case "CHACHA20-Poly1305":
+            case "CHACHA20 Poly1305":
                 //Generate ChaCha20 key
                 int chachasize = 256;
                 KeyGenerator c = KeyGenerator.getInstance("CHACHA20");
@@ -157,14 +154,14 @@ public class CryptoManager {
         Files.write(Paths.get(filename), encodedData.getBytes(StandardCharsets.UTF_8));
     }
     private void storeKey(){
-        String KeyFileEnc = KEY_DIR + this.clienteId + "_enc.key"; 
-        String KeyFileAuth = KEY_DIR + this.clienteId + "_auth.key";
         try{
             //Gerar salt
             byte[] salt = new byte[SALT_LENGTH];
             secureRandom.nextBytes(salt);
             //KEK
             SecretKey kek = getMKey(salt);
+            String KeyFileEnc = KEY_DIR + this.clienteId + "~" + algorithm + "~enc.key"; 
+            String KeyFileAuth = KEY_DIR + this.clienteId + "~" + algorithm + "~auth.key";
             //Guardar chave de encriptação
             byte[] iv = new byte[GCM_IV_LENGTH];
             secureRandom.nextBytes(iv);
@@ -185,8 +182,14 @@ public class CryptoManager {
     
     }
 
-
-    private void loadKeys(){        
+    private void loadKeys(){
+        
+        if (sKey != null && (!hasHmac || (hasHmac && hmac != null))) {
+        // Both keys are already in memory, no need to re-load
+        return;
+    }
+        
+        
         File dir = new File(KEY_DIR);
         File[] files = dir.listFiles((d, name) -> name.startsWith(this.clienteId));
         
@@ -215,10 +218,10 @@ public class CryptoManager {
                 SecretKey originalKey = decryptMasterKey(encryptedKeyWithTag, kek, iv);
 
                 //Key assignment
-                if(f.getName().endsWith("_enc.key")){
+                if(f.getName().endsWith("enc.key")){
                     sKey = originalKey;
                     System.out.println("Encryption key loaded successfully from " + f.getName());
-                }else if(f.getName().endsWith("_auth.key")){
+                }else if(f.getName().endsWith("auth.key")){
                     hmac = originalKey;
                     hasHmac = true;
                     System.out.println("HMAC key loaded successfully from " + f.getName());
@@ -243,7 +246,7 @@ public class CryptoManager {
         try{        
                 loadKeys();// Load the keys and decrypt them so that we can now encrypt data with them
                 switch(algorithm){
-                    case "AES/GCM":
+                    case "AES GCM":
                         byte[] iv = new byte[GCM_IV_LENGTH];
                         secureRandom.nextBytes(iv);
                         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -256,7 +259,7 @@ public class CryptoManager {
                         byteBuffer.put(cipherText);
                         cipherBlock = byteBuffer.array();
                         break;
-                    case "AES/CBC/PKCS5Padding":
+                    case "AES CBC PKCS5Padding":
                         byte[] ivCbc = new byte[16];
                         secureRandom.nextBytes(ivCbc);
                         Cipher cipherCbc = Cipher.getInstance("AES/CBC/PKCS5Padding");
@@ -281,7 +284,7 @@ public class CryptoManager {
                             System.err.println("HMAC key not available for AES/CBC authentication.");
                         }
                         break;
-                    case "CHACHA20-Poly1305":
+                    case "CHACHA20 Poly1305":
                         byte[] nonce = new byte[12];
                         secureRandom.nextBytes(nonce);
                         Cipher chachaCipher = Cipher.getInstance("ChaCha20-Poly1305");
@@ -301,9 +304,98 @@ public class CryptoManager {
         }
         return cipherBlock;
     }
+    public byte[] decryptBlock(byte[] cipherBlock){
+        byte[] plainText = null;
+        try{
+            loadKeys();
+            switch(algorithm){
+                case "AES GCM":
+                    ByteBuffer byteBuffer = ByteBuffer.wrap(cipherBlock);
+                    byte[] iv = new byte[GCM_IV_LENGTH];
+                    byteBuffer.get(iv);
+                    byte[] cipherText = new byte[byteBuffer.remaining()];
+                    byteBuffer.get(cipherText);
+                    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                    GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv);
+                    cipher.init(Cipher.DECRYPT_MODE, sKey, gcmSpec);
+                    plainText = cipher.doFinal(cipherText);
+                    break;
+                case "AES CBC PKCS5Padding":
+                    ByteBuffer byteBufferCbc = ByteBuffer.wrap(cipherBlock);
+                    byte[] ivCbc = new byte[16];
+                    byteBufferCbc.get(ivCbc);
+                    byte[] cipherTextCbc = new byte[byteBufferCbc.remaining()];
+                    byteBufferCbc.get(cipherTextCbc);
+                    if (hasHmac){
+                        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+                        mac.init(hmac);
+                        int hmacLength = mac.getMacLength();
+                        int cipherTextLength = cipherTextCbc.length - hmacLength;
+                        byte[] ciphertextWithIV = new byte[ivCbc.length + cipherTextLength];
+                        System.arraycopy(ivCbc, 0, ciphertextWithIV, 0, ivCbc.length);
+                        System.arraycopy(cipherTextCbc, 0, ciphertextWithIV, ivCbc.length, cipherTextLength);
+                        byte[] receivedHmac = new byte[hmacLength];
+                        System.arraycopy(cipherTextCbc, cipherTextLength, receivedHmac, 0, hmacLength);
+                        byte[] computedHmac = mac.doFinal(ciphertextWithIV);
+                        if(!java.util.Arrays.equals(receivedHmac, computedHmac))
+                            throw new SecurityException("HMAC verification failed. Data integrity compromised.");    
+                        Cipher cipherCbc = Cipher.getInstance("AES/CBC/PKCS5Padding");
+                        cipherCbc.init(Cipher.DECRYPT_MODE, sKey, new IvParameterSpec(ivCbc));
+                        plainText = cipherCbc.doFinal(cipherTextCbc, 0, cipherTextLength);
+                    }else{
+                        System.err.println("HMAC key not available for AES/CBC authentication.");
+                    }
+                    break;
+                case "CHACHA20 Poly1305":
+                    ByteBuffer chaChaBuffer = ByteBuffer.wrap(cipherBlock);
+                    byte[] nonce = new byte[12];
+                    chaChaBuffer.get(nonce);
+                    byte[] cipherTextChaCha = new byte[chaChaBuffer.remaining()];
+                    chaChaBuffer.get(cipherTextChaCha);
+                    Cipher chachaCipher = Cipher.getInstance("ChaCha20-Poly1305");
+                    chachaCipher.init(Cipher.DECRYPT_MODE, sKey, new IvParameterSpec(nonce));
+                    plainText = chachaCipher.doFinal(cipherTextChaCha);
+                    break;
+                default:
+                    System.err.println("Unsupported algorithm for decryption: " + algorithm + " Decryption Block failed.");
+            }
+        }catch(Exception e){
+            System.err.println("Error during block decryption: " + e.getMessage());
+        }
+        return plainText;
+    }
+
+    private String encryptString (String plaintext, SecretKeySpec kek) throws Exception{
+        byte[] iv = new byte[GCM_IV_LENGTH];
+        secureRandom.nextBytes(iv);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv);
+        cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(kek.getEncoded(),"AES"), gcmSpec);
+        byte[] cipherText = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+        ByteBuffer byteBuffer = ByteBuffer.allocate(iv.length + cipherText.length);
+        byteBuffer.put(iv);
+        byteBuffer.put(cipherText);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(byteBuffer.array());
+    }
+    private String decryptString (String ciphertext, SecretKeySpec kek) throws Exception{
+        byte[] decodedData = Base64.getUrlDecoder().decode(ciphertext);
+        ByteBuffer byteBuffer = ByteBuffer.wrap(decodedData);
+        byte[] iv = new byte[GCM_IV_LENGTH];
+        byteBuffer.get(iv);
+        byte[] cipherText = new byte[byteBuffer.remaining()];
+        byteBuffer.get(cipherText);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv);
+        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(kek.getEncoded(),"AES"), gcmSpec);
+        byte[] plainText = cipher.doFinal(cipherText);
+        return new String(plainText, StandardCharsets.UTF_8);
+    }
 
 
-    //decryptBlock
+
+
+
+
 
     public static void main(String[] args) {
     try {

@@ -1,2 +1,2 @@
-AES/GCM
+AES GCM
 KEYSIZE: 256 bits
