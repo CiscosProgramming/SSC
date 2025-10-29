@@ -46,8 +46,7 @@ public class CryptoManager {
     // A palavra passe e fornecida pelo utilizador na inicialização do cliente
     // tera que ser sempre a mesma caso contrario a master key calculada sera diferente e as keys nao poderao ser desencriptadas
 
-    public CryptoManager(char[] pwd, String clienteId){
-        this.clienteId = clienteId;
+    public CryptoManager(char[] pwd){
         this.pwd = pwd;
         secureRandom = new SecureRandom();
         try {
@@ -177,4 +176,10 @@ public class CryptoManager {
         }
     
     }
+
+    public static void main(String[] args) {
+    char[] password = "StrongPass123!".toCharArray();
+    new CryptoManager(password);
+}
+
 }
