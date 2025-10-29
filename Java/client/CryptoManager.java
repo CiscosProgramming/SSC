@@ -13,6 +13,7 @@ import java.nio.file.Paths;         // Para utilitário de caminhos de ficheiro
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator; //Gerar key
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec; //converter byte[] em SecretKey
 import javax.crypto.SecretKey; //Representar chave secreta
@@ -37,7 +38,7 @@ public class CryptoManager {
     private static final int GCM_IV_LENGTH = 12;    // 96 bits
     private static final int GCM_TAG_LENGTH = 16;   //128 bits
 
-    private final String KEY_DIR = "KeyStore/"; //Diretoria para guardar a chave
+    private final String KEY_DIR = "Java/client/KeyStore/"; //Diretoria para guardar a chave
     private static final int PBKDF2_ITERATIONS = 65536;
     private static final int PBKDF2_KEY_LENGTH = 256;
     private static final int SALT_LENGTH = 16;
@@ -46,25 +47,32 @@ public class CryptoManager {
     // A palavra passe e fornecida pelo utilizador na inicialização do cliente
     // tera que ser sempre a mesma caso contrario a master key calculada sera diferente e as keys nao poderao ser desencriptadas
 
-    public CryptoManager(char[] pwd){
+    public CryptoManager(char[] pwd, String clienteId){
+        this.clienteId = clienteId;
         this.pwd = pwd;
         secureRandom = new SecureRandom();
         try {
             loadFile();
-            createKey();
-            storeKey();
+            File keyFile = new File(KEY_DIR + this.clienteId + "_enc.key");//Verificar se a key ja existe
+            if(!keyFile.exists()){
+                createKey();
+                storeKey();
+            }else{
+                loadKeys();
+            }    
         } catch (IOException | NoSuchAlgorithmException e) {
             System.err.println("Error loading crypto configuration or creating key");
         } finally {
             //Limpar a password da memória por motivos de segurança
-            if (this.pwd != null) {
+            /* if (this.pwd != null) {
                 java.util.Arrays.fill(pwd, ' ');
                 pwd = null;
             }
+            */
         }
     }
     private void loadFile() throws IOException{
-        File crypto = new File("cryptoconfig.txt");
+        File crypto = new File("Java/client/cryptoconfig.txt");
             //Check
             if(!crypto.exists()){
                 throw new IOException("Crypto configuration file not found.");
@@ -177,9 +185,152 @@ public class CryptoManager {
     
     }
 
+
+    private void loadKeys(){        
+        File dir = new File(KEY_DIR);
+        File[] files = dir.listFiles((d, name) -> name.startsWith(this.clienteId));
+        
+        if (!dir.exists() || !dir.isDirectory()) {
+        System.err.println("[ERROR] Key directory not found: " + dir.getAbsolutePath());
+        return;
+        }
+        
+        //Check
+        if (files == null || files.length == 0) {
+            System.err.println("No key files found for client ID: " + this.clienteId);
+            return;
+        }
+        for(File f : files ){
+            try{
+                byte[] encodedKeyData = Files.readAllBytes(f.toPath());
+                byte[] decodedKeyData = Base64.getDecoder().decode(encodedKeyData);
+                ByteBuffer byteBuffer = ByteBuffer.wrap(decodedKeyData);
+                byte[] salt = new byte[SALT_LENGTH];
+                byteBuffer.get(salt);
+                SecretKey kek = getMKey(salt); //derives KEK from password and salt
+                byte[] iv = new byte[GCM_IV_LENGTH];
+                byteBuffer.get(iv);
+                byte[] encryptedKeyWithTag = new byte[byteBuffer.remaining()];
+                byteBuffer.get(encryptedKeyWithTag);
+                SecretKey originalKey = decryptMasterKey(encryptedKeyWithTag, kek, iv);
+
+                //Key assignment
+                if(f.getName().endsWith("_enc.key")){
+                    sKey = originalKey;
+                    System.out.println("Encryption key loaded successfully from " + f.getName());
+                }else if(f.getName().endsWith("_auth.key")){
+                    hmac = originalKey;
+                    hasHmac = true;
+                    System.out.println("HMAC key loaded successfully from " + f.getName());
+                }
+            }catch(Exception e){
+                System.err.println("Error loading key from file " + f.getName() + ": " + e.getMessage()); // Debug
+            }
+        }
+    }
+    private SecretKey decryptMasterKey(byte[] encryptedKeyWithTag, SecretKey kek, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv); // Tag em bits
+        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(kek.getEncoded(), "AES"), gcmSpec);
+        byte[] decryptedKeyBytes = cipher.doFinal(encryptedKeyWithTag);
+        return new SecretKeySpec(decryptedKeyBytes, "AES");
+
+
+
+    }
+    public byte[] encryptBlock(byte[] plaintext){
+        byte[] cipherBlock = null;
+        try{        
+                loadKeys();// Load the keys and decrypt them so that we can now encrypt data with them
+                switch(algorithm){
+                    case "AES/GCM":
+                        byte[] iv = new byte[GCM_IV_LENGTH];
+                        secureRandom.nextBytes(iv);
+                        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv);
+                        cipher.init(Cipher.ENCRYPT_MODE, sKey, gcmSpec);
+                        byte[] cipherText = cipher.doFinal(plaintext);
+
+                        ByteBuffer byteBuffer = ByteBuffer.allocate(iv.length + cipherText.length);
+                        byteBuffer.put(iv);
+                        byteBuffer.put(cipherText);
+                        cipherBlock = byteBuffer.array();
+                        break;
+                    case "AES/CBC/PKCS5Padding":
+                        byte[] ivCbc = new byte[16];
+                        secureRandom.nextBytes(ivCbc);
+                        Cipher cipherCbc = Cipher.getInstance("AES/CBC/PKCS5Padding");
+                        cipherCbc.init(Cipher.ENCRYPT_MODE, sKey, new IvParameterSpec(ivCbc));
+                        byte[] cipherTextCbc = cipherCbc.doFinal(plaintext);
+                        
+                        ByteBuffer byteBufferCbc = ByteBuffer.allocate(ivCbc.length + cipherTextCbc.length);
+                        byteBufferCbc.put(ivCbc);
+                        byteBufferCbc.put(cipherTextCbc);
+                        byte [] combined = byteBufferCbc.array();
+
+                        if(hasHmac){
+                            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+                            mac.init(hmac);
+                            byte[] hmacValue = mac.doFinal(combined);
+
+                            ByteBuffer finalBuffer = ByteBuffer.allocate(combined.length + hmacValue.length);
+                            finalBuffer.put(combined);
+                            finalBuffer.put(hmacValue);
+                            cipherBlock = finalBuffer.array();
+                        }else{
+                            System.err.println("HMAC key not available for AES/CBC authentication.");
+                        }
+                        break;
+                    case "CHACHA20-Poly1305":
+                        byte[] nonce = new byte[12];
+                        secureRandom.nextBytes(nonce);
+                        Cipher chachaCipher = Cipher.getInstance("ChaCha20-Poly1305");
+                        chachaCipher.init(Cipher.ENCRYPT_MODE, sKey, new IvParameterSpec(nonce));
+                        byte[] cipherTextChaCha = chachaCipher.doFinal(plaintext);
+
+                        ByteBuffer chaChaBuffer = ByteBuffer.allocate(nonce.length + cipherTextChaCha.length);
+                        chaChaBuffer.put(nonce);
+                        chaChaBuffer.put(cipherTextChaCha);
+                        cipherBlock = chaChaBuffer.array();
+                        break;
+                    default:
+                        System.err.println("Unsupported algorithm for encryption: " + algorithm + " Encryption Block failed.");
+                }
+        }catch(Exception e){
+            System.err.println("Error during block encryption: " + e.getMessage());
+        }
+        return cipherBlock;
+    }
+
+
+    //decryptBlock
+
     public static void main(String[] args) {
-    char[] password = "StrongPass123!".toCharArray();
-    new CryptoManager(password);
+    try {
+        // Password used for key encryption/decryption
+        char[] password = "StrongPass123!".toCharArray();
+
+        // Create CryptoManager for client ID "1904"
+        CryptoManager cm = new CryptoManager(password, "1904");
+
+        // ---- Test Key Loading ----
+        System.out.println("\n[TEST] Loading keys from KeyStore...");
+        cm.loadKeys();  // This should print success messages for enc/hmac keys
+
+        // ---- Test Encryption ----
+        String message = "Hello from the CryptoManager!";
+        System.out.println("[TEST] Encrypting message: " + message);
+        byte[] encrypted = cm.encryptBlock(message.getBytes(StandardCharsets.UTF_8));
+
+        if (encrypted != null) {
+            System.out.println("[RESULT] Ciphertext (Base64): " + Base64.getEncoder().encodeToString(encrypted));
+        } else {
+            System.err.println("[ERROR] Encryption failed!");
+        }
+
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
 }
 
 }
