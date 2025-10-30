@@ -22,7 +22,11 @@ public class BlockStorageClient {
             while (true) {
                 System.out.print("Command (PUT/GET/LIST/SEARCH/EXIT): ");
                 String cmd = scanner.nextLine().toUpperCase();
-
+                //
+                String clientId = "1904";
+                char[] password = "Benfica".toCharArray();
+                CryptoManager cryptoManager = new CryptoManager(password, clientId);
+                //
                 switch (cmd) {
                     case "PUT":
                         System.out.print("Enter local file path: ");

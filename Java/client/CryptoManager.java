@@ -7,6 +7,9 @@ import java.nio.charset.StandardCharsets; // Para codificação/decodificação 
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;     // Para geração segura de números aleatórios (essencial para KeyGenerator)
 import java.util.Base64;               // Para codificar a chave em Base64 antes de guardar
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.nio.file.Files;             // Para ler/escrever o ficheiro da chave (operação simples)
 import java.nio.file.Paths;         // Para utilitário de caminhos de ficheiro
 
@@ -39,6 +42,8 @@ public class CryptoManager {
     private static final int PBKDF2_ITERATIONS = 65536;
     private static final int PBKDF2_KEY_LENGTH = 256;
     private static final int SALT_LENGTH = 16;
+    private SecretKey seKey;
+
     
     //Criar palavra passe para gerar uma master key que desencripta as outras keys em KeyStore
     // A palavra passe e fornecida pelo utilizador na inicialização do cliente
@@ -127,6 +132,10 @@ public class CryptoManager {
             default:
                 throw new NoSuchAlgorithmException("Unsupported algorithm: " + algorithm);
         }
+        KeyGenerator SeK = KeyGenerator.getInstance("AES");
+        SeK.init(256, secureRandom);
+        this.seKey = SeK.generateKey();
+        System.out.println("Generated Searchable Encryption key of size 256 bits.");
     }
     private SecretKey getMKey(byte[] salt) throws NoSuchAlgorithmException, InvalidKeySpecException {
         KeySpec spec = new PBEKeySpec(this.pwd, salt, PBKDF2_ITERATIONS, PBKDF2_KEY_LENGTH);
@@ -162,12 +171,24 @@ public class CryptoManager {
             SecretKey kek = getMKey(salt);
             String KeyFileEnc = KEY_DIR + this.clienteId + "~" + algorithm + "~enc.key"; 
             String KeyFileAuth = KEY_DIR + this.clienteId + "~" + algorithm + "~auth.key";
+            String KeyFileSe = KEY_DIR + this.clienteId + "~" + algorithm + "~se.key";
             //Guardar chave de encriptação
             byte[] iv = new byte[GCM_IV_LENGTH];
             secureRandom.nextBytes(iv);
             byte[] encryptedData = encryptMasterKey(sKey, kek, iv);
             protectKey(salt, encryptedData, KeyFileEnc);
             System.out.println("Encryption key stored successfully in " + KeyFileEnc);
+            //Guardar chave de pesquisa segura
+            if(this.seKey != null){
+                byte[] iv_se = new byte[GCM_IV_LENGTH];
+                secureRandom.nextBytes(iv_se);
+                byte[] encryptedDataSe = encryptMasterKey(this.seKey, kek, iv_se);
+                protectKey(salt, encryptedDataSe, KeyFileSe);
+                System.out.println("Searchable Encryption key stored successfully in " + KeyFileSe);
+            }
+
+
+
             //Guardar chave de autenticação se existir
             if(hasHmac){
                 byte[] iv_hmac = new byte[GCM_IV_LENGTH];
@@ -241,10 +262,10 @@ public class CryptoManager {
 
 
     }
-    public byte[] encryptBlock(byte[] plaintext){
+    private byte[] encryptBlock(byte[] plaintext){
         byte[] cipherBlock = null;
         try{        
-                loadKeys();// Load the keys and decrypt them so that we can now encrypt data with them
+                //loadKeys();// Load the keys and decrypt them so that we can now encrypt data with them
                 switch(algorithm){
                     case "AES GCM":
                         byte[] iv = new byte[GCM_IV_LENGTH];
@@ -304,10 +325,10 @@ public class CryptoManager {
         }
         return cipherBlock;
     }
-    public byte[] decryptBlock(byte[] cipherBlock){
+    private byte[] decryptBlock(byte[] cipherBlock){
         byte[] plainText = null;
         try{
-            loadKeys();
+            //loadKeys();
             switch(algorithm){
                 case "AES GCM":
                     ByteBuffer byteBuffer = ByteBuffer.wrap(cipherBlock);
@@ -365,6 +386,60 @@ public class CryptoManager {
         return plainText;
     }
 
+    public Map<String, byte[]> generateSearchIndex(String fileId, List<String> keywords) throws Exception {
+        Map<String, byte[]> searchIndex = new HashMap<>();
+        //Check
+        if(this.seKey == null){
+            System.err.println("Searchable Encryption key not initialized. - CryptoManager");
+        }
+        byte[] fileIdBytes = fileId.getBytes(StandardCharsets.UTF_8);
+        byte[] encryptedFileId = encryptConfidential(fileIdBytes);
+        for(String keyword : keywords){
+            String searchToken = generateDeterministicToken(keyword);
+            searchIndex.put(searchToken, encryptedFileId);
+        }
+        return searchIndex;
+    }
+
+    private String generateDeterministicToken(String keyword) throws Exception {
+    // Usamos HMAC-SHA256 como uma PRF Determinística, chaveada pela seKey
+    javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+    mac.init(this.seKey);
+    
+    byte[] keywordBytes = keyword.getBytes(StandardCharsets.UTF_8);
+    byte[] token = mac.doFinal(keywordBytes);
+    
+    // Converte o token binário para Base64 para ser usado como chave String no Map
+    return Base64.getEncoder().encodeToString(token); 
+    }
+
+    private byte[] encryptConfidential(byte[] plaintext) throws Exception {
+    // Reutiliza a lógica robusta de AEAD (usando AES/GCM)
+    
+    // 1. Gera IV/Nonce
+    byte[] iv = new byte[GCM_IV_LENGTH];
+    secureRandom.nextBytes(iv);
+    
+    // 2. Criptografa e Autentica
+    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+    GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv);
+    
+    // Usa a chave de ENCRIPTAÇÃO principal (sKey)
+    cipher.init(Cipher.ENCRYPT_MODE, sKey, gcmSpec);
+    
+    byte[] cipherText = cipher.doFinal(plaintext);
+
+    // 3. Combina IV e Ciphertext + Tag para o bloco final
+    ByteBuffer byteBuffer = ByteBuffer.allocate(iv.length + cipherText.length);
+    byteBuffer.put(iv);
+    byteBuffer.put(cipherText);
+    
+    return byteBuffer.array();
+}
+
+
+
+    /* 
     private String encryptString (String plaintext, SecretKeySpec kek) throws Exception{
         byte[] iv = new byte[GCM_IV_LENGTH];
         secureRandom.nextBytes(iv);
@@ -390,12 +465,7 @@ public class CryptoManager {
         byte[] plainText = cipher.doFinal(cipherText);
         return new String(plainText, StandardCharsets.UTF_8);
     }
-
-
-
-
-
-
+    */
 
     public static void main(String[] args) {
     try {
