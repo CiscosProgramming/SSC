@@ -7,17 +7,19 @@ import java.util.*;
 public class BlockStorageClient {
     private static final int PORT = 5000;
     private static final int BLOCK_SIZE = 4096;
-    private static final String INDEX_FILE = "client_index.ser";
+    private static String INDEX_FILE = "";
 
     private static Map<String, List<String>> fileIndex = new HashMap<>();
 
     public static void main(String[] args) throws IOException, ClassNotFoundException {
+        Scanner client = new Scanner(System.in);
+        System.out.println("Enter client ID:");
+        String clientId = client.nextLine();
+        System.out.println("Enter password: ");
+        char[] password = client.nextLine().toCharArray();
+        INDEX_FILE = "client_" + clientId + "_ser";
         loadIndex();
-        //
-        String clientId = "1904";
-        char[] password = "StrongPass123!".toCharArray();
-        CryptoManager cm = new CryptoManager(password, clientId);
-        //
+        CryptoManager cm = new CryptoManager(password,clientId); 
         Socket socket = new Socket("localhost", PORT);
         try (
             DataInputStream in = new DataInputStream(socket.getInputStream());
