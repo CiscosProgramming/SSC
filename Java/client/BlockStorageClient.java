@@ -2,6 +2,8 @@
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 
 public class BlockStorageClient {
@@ -84,86 +86,89 @@ public class BlockStorageClient {
     private static void putFile(File file, List<String> keywords, DataOutputStream out, DataInputStream in, CryptoManager cm) throws IOException {
         List<String> blocks = new ArrayList<>();
         String fileId = file.getName();
-        // Generate and store searchable encryption index
-        try{
-            Map<String, List<byte[]>> secureIndex = cm.generateSearchIndex(fileId, keywords);
-            System.out.println("Generated searchable encryption index for " + fileId + " with " + secureIndex.size() + " keyword entries.");
-            out.writeUTF("STORE_METADATA");
-            out.writeUTF(fileId);
-            out.writeInt(secureIndex.size());
 
-            for(Map.Entry<String, List<byte[]>> entry : secureIndex.entrySet()){
-                out.writeUTF(entry.getKey());
-                List <byte[]> fileIdList = entry.getValue();
-                out.writeInt(fileIdList.size());
-                
-                for(byte[] encFileId : fileIdList){
-                    out.writeInt(encFileId.length);
-                    out.write(encFileId);
-                }
-            }
-            out.flush();
-            String response = in.readUTF();
-            if(!response.equals("METADATA_OK")){
-                System.out.println("Error storing metadata index for file: " + fileId);
-                return;
-            }
-        }catch(Exception e){
-            System.out.println("Error for Searchable Encryption Index generation");
-        }
+        // --- ALTERAÇÃO: Adicionado try-catch para NoSuchAlgorithmException ---
+        try {
+            // Generate and store searchable encryption index (Esta parte não muda)
+            try{
+                Map<String, List<byte[]>> secureIndex = cm.generateSearchIndex(fileId, keywords);
+                System.out.println("Generated searchable encryption index for " + fileId + " with " + secureIndex.size() + " keyword entries.");
+                out.writeUTF("STORE_METADATA");
+                out.writeUTF(fileId);
+                out.writeInt(secureIndex.size());
 
-        //Encrypt and store file blocks
-        try (FileInputStream fis = new FileInputStream(file)) {
-            byte[] buffer = new byte[BLOCK_SIZE];
-            int bytesRead;
-            int blockNum = 0;
-            System.out.println("Storing file blocks:");
-            while ((bytesRead = fis.read(buffer)) != -1) {
-                byte[] plaintextBlock = Arrays.copyOf(buffer, bytesRead);
-                String blockId = file.getName() + "_block_" + blockNum++;
-                
-                //Encrypt block data
-                byte[] encryptedBlockData = cm.encryptBlock(plaintextBlock);
-                if(encryptedBlockData == null){
-                    System.out.println("Encryption failed for block " + blockId);
-                    return;
+                for(Map.Entry<String, List<byte[]>> entry : secureIndex.entrySet()){
+                    out.writeUTF(entry.getKey());
+                    List <byte[]> fileIdList = entry.getValue();
+                    out.writeInt(fileIdList.size());
+                    
+                    for(byte[] encFileId : fileIdList){
+                        out.writeInt(encFileId.length);
+                        out.write(encFileId);
+                    }
                 }
-                out.writeUTF("STORE_BLOCK");
-                out.writeUTF(blockId);
-                out.writeInt(encryptedBlockData.length);
-                out.write(encryptedBlockData);
-                
-                out.writeInt(0); // no keywords sent only index
                 out.flush();
                 String response = in.readUTF();
-                if (!response.equals("OK")) {
-                    System.out.println("Error storing block: " + blockId);
+                if(!response.equals("METADATA_OK")){
+                    System.out.println("Error storing metadata index for file: " + fileId);
                     return;
                 }
-                blocks.add(blockId);
-                System.out.print("."); // Just for debug
-                /*
-                // Send keywords for first block only
-                if (blockNum == 1) {
-                    out.writeInt(keywords.size());
-                    for (String kw : keywords) out.writeUTF(kw);
-		        System.out.println("/nSent keywords./n"); // Just for debug    
-                } else {
-                    out.writeInt(0); // no keywords for other blocks
-                }
-
-                out.flush();
-                String response = in.readUTF();
-                if (!response.equals("OK")) {
-                    System.out.println("Error storing block: " + blockId);
-                    return;
-                }
-                blocks.add(blockId);  */
+            }catch(Exception e){
+                System.out.println("Error for Searchable Encryption Index generation");
             }
+
+            //Encrypt and store file blocks
+            try (FileInputStream fis = new FileInputStream(file)) {
+                byte[] buffer = new byte[BLOCK_SIZE];
+                int bytesRead;
+                // int blockNum = 0; // <-- Já não é necessário
+
+                // --- ALTERAÇÃO: Inicializar o MessageDigest fora do loop ---
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                
+                System.out.println("Storing file blocks:");
+                while ((bytesRead = fis.read(buffer)) != -1) {
+                    byte[] plaintextBlock = Arrays.copyOf(buffer, bytesRead);
+                    
+                    // --- ALTERAÇÃO PRINCIPAL: O blockId é o HASH do plaintext ---
+                    // String blockId = file.getName() + "_block_" + blockNum++; // <-- Linha antiga removida
+                    
+                    byte[] hash = digest.digest(plaintextBlock); // 1. Calcular o hash do plaintext
+                    String blockId = bytesToHex(hash);          // 2. Converter para String Hex
+                    // --- FIM DA ALTERAÇÃO ---
+
+                    //Encrypt block data
+                    byte[] encryptedBlockData = cm.encryptBlock(plaintextBlock); // 3. Encriptar o plaintext
+                    if(encryptedBlockData == null){
+                        System.out.println("Encryption failed for block " + blockId);
+                        return;
+                    }
+                    
+                    out.writeUTF("STORE_BLOCK");
+                    out.writeUTF(blockId); // 4. Enviar o HASH (blockId)
+                    out.writeInt(encryptedBlockData.length);
+                    out.write(encryptedBlockData); // 5. Enviar o bloco ENCRIPTADO
+                    
+                    out.writeInt(0); // no keywords sent only index
+                    out.flush();
+                    String response = in.readUTF();
+                    if (!response.equals("OK")) {
+                        System.out.println("Error storing block: " + blockId);
+                        return;
+                    }
+                    blocks.add(blockId); // 6. Adicionar o HASH ao índice local
+                    System.out.print(".");
+                }
+            }
+            fileIndex.put(file.getName(), blocks);
+            System.out.println();
+            System.out.println("File stored with " + blocks.size() + " blocks.");
+        
+        // --- ALTERAÇÃO: Lidar com o erro de SHA-256 não existir ---
+        } catch (NoSuchAlgorithmException e) {
+            System.err.println("Erro crítico: Algoritmo SHA-256 não encontrado. O PUT falhou.");
+            e.printStackTrace();
         }
-        fileIndex.put(file.getName(), blocks);
-	    System.out.println();
-	    System.out.println("File stored with " + blocks.size() + " blocks.");
     }
 
     private static void getFile(String filename, DataOutputStream out, DataInputStream in, CryptoManager cm) throws IOException {
@@ -263,4 +268,16 @@ public class BlockStorageClient {
             System.err.println("Failed to load index: " + e.getMessage());
         }
     }
+
+    private static final char[] HEX_ARRAY = "0123456789ABCDEF".toCharArray();
+    private static String bytesToHex(byte[] bytes) {
+        char[] hexChars = new char[bytes.length * 2];
+        for (int j = 0; j < bytes.length; j++) {
+            int v = bytes[j] & 0xFF;
+            hexChars[j * 2] = HEX_ARRAY[v >>> 4];
+            hexChars[j * 2 + 1] = HEX_ARRAY[v & 0x0F];
+        }
+        return new String(hexChars);
+    }
+
 }

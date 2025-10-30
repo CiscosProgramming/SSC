@@ -89,29 +89,29 @@ public class BlockStorageServer {
     }
 
     private static void storeBlock(DataInputStream in, DataOutputStream out) throws IOException {
-        String blockId = in.readUTF();
+        String blockId = in.readUTF(); // Este é agora o HASH (ex: "A5EF...")
         int length = in.readInt();
-        byte[] data = new byte[length];
+        byte[] data = new byte[length]; // Este é o encryptedBlockData
         in.readFully(data);
 
-        // Write block to disk
+        // --- ALTERAÇÃO: LÓGICA DE DEDUPLICAÇÃO ---
         File blockFile = new File(BLOCK_DIR, blockId);
-        try (FileOutputStream fos = new FileOutputStream(blockFile)) {
-            fos.write(data);
-        }
-
-        // Read optional metadata (keywords)
-        /* int keywordCount = in.readInt();
-        if (keywordCount > 0) {
-            List<String> keywords = new ArrayList<>();
-            for (int i = 0; i < keywordCount; i++) {
-                keywords.add(in.readUTF().toLowerCase());
+        
+        if (!blockFile.exists()) {
+            // Bloco não existe, vamos escrevê-lo no disco
+            try (FileOutputStream fos = new FileOutputStream(blockFile)) {
+                fos.write(data);
             }
-            securemetadata.put(blockId, keywords);
-            saveMetadata();
-        }*/ //Ignora keywords visto que o indice adicionado e suficiente
+            // System.out.println("Stored new block: " + blockId); // (Opcional: log)
+        } else {
+            // Bloco já existe. Deduplicação ocorreu com sucesso.
+            // O servidor não precisa de fazer nada.
+            // System.out.println("Deduplicated block: " + blockId); // (Opcional: log)
+        }
+        // --- FIM DA ALTERAÇÃO ---
+
         in.readInt(); // Read and ignore keyword count
-        out.writeUTF("OK");
+        out.writeUTF("OK"); // Envia "OK" em AMBOS os casos (novo ou duplicado)
         out.flush();
     }
 
