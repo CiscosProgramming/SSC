@@ -328,7 +328,7 @@ public class CryptoManager {
         }
         return cipherBlock;
     }
-    private byte[] decryptBlock(byte[] cipherBlock){
+    public byte[] decryptBlock(byte[] cipherBlock){
         byte[] plainText = null;
         try{
             //loadKeys();
@@ -407,7 +407,7 @@ public class CryptoManager {
         }
         return searchIndex;
     }
-    private String generateDeterministicToken(String keyword) throws Exception {
+    public String generateDeterministicToken(String keyword) throws Exception {
     // Usamos HMAC-SHA256 como uma PRF Determinística, chaveada pela seKey
     javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
     mac.init(this.seKey);
@@ -441,7 +441,17 @@ public class CryptoManager {
     
     return byteBuffer.array();
 }
-
+    public byte[] decryptConfidential(byte[] cipherBlock) throws Exception {
+        ByteBuffer byteBuffer = ByteBuffer.wrap(cipherBlock);
+        byte[] iv = new byte[GCM_IV_LENGTH];
+        byteBuffer.get(iv);
+        byte[] cipherText = new byte[byteBuffer.remaining()];
+        byteBuffer.get(cipherText);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv);
+        cipher.init(Cipher.DECRYPT_MODE, sKey, gcmSpec);
+        return cipher.doFinal(cipherText);
+    }
 
 
     /* 

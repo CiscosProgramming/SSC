@@ -140,15 +140,17 @@ public class BlockStorageServer {
     }
 
     private static void searchBlocks(DataInputStream in, DataOutputStream out) throws IOException {
-        String keyword = in.readUTF().toLowerCase();
-        List<String> results = new ArrayList<>();
-        for (Map.Entry<String, List<byte[]>> entry : securemetadata.entrySet()) {
-            if (entry.getValue().contains(keyword)) {
-                results.add(entry.getKey());
+        String token = in.readUTF();
+        List<byte[]> results = securemetadata.get(token);
+        if(results == null){
+            out.writeInt(0);
+        }else{
+            out.writeInt(results.size());
+            for(byte[] encFileId : results){
+                out.writeInt(encFileId.length);
+                out.write(encFileId);
             }
         }
-        out.writeInt(results.size());
-        for (String f : results) out.writeUTF(f);
         out.flush();
     }
 

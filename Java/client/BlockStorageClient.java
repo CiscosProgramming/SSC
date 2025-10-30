@@ -1,6 +1,7 @@
 
 import java.io.*;
 import java.net.*;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class BlockStorageClient {
@@ -48,7 +49,7 @@ public class BlockStorageClient {
                     case "GET":
                         System.out.print("Enter filename to retrieve: ");
                         String filename = scanner.nextLine();
-                        getFile(filename, out, in);
+                        getFile(filename, out, in, cm);
                         break;
 
                     case "LIST":
@@ -59,7 +60,7 @@ public class BlockStorageClient {
                     case "SEARCH":
                         System.out.print("Enter keyword to search: ");
                         String keyword = scanner.nextLine();
-                        searchFiles(keyword, out, in);
+                        searchFiles(keyword, out, in, cm);
                         break;
 
                     case "EXIT":
@@ -163,14 +164,16 @@ public class BlockStorageClient {
 	    System.out.println("File stored with " + blocks.size() + " blocks.");
     }
 
-    private static void getFile(String filename, DataOutputStream out, DataInputStream in) throws IOException {
+    private static void getFile(String filename, DataOutputStream out, DataInputStream in, CryptoManager cm) throws IOException {
         List<String> blocks = fileIndex.get(filename);
         if (blocks == null) {
-	    System.out.println();	    
+	        System.out.println();	    
             System.out.println("File not found in local index.");
             return;
         }
-        try (FileOutputStream fos = new FileOutputStream("retrieved_" + filename)) {
+        String outputFileName = "retrieved_" + filename;
+        try (FileOutputStream fos = new FileOutputStream(outputFileName)) {
+            System.out.println("Retrieving and decrypting file blocks:");
             for (String blockId : blocks) {
                 out.writeUTF("GET_BLOCK");
                 out.writeUTF(blockId);
@@ -178,27 +181,66 @@ public class BlockStorageClient {
                 int length = in.readInt();
                 if (length == -1) {
                     System.out.println("Block not found: " + blockId);
+                    fos.close();
+                    new File(outputFileName).delete(); // Delete incomplete file
                     return;
                 }
                 byte[] data = new byte[length];
                 in.readFully(data);
-		System.out.print("."); // Just for debug 
-                fos.write(data);
+		        
+                try{
+                    byte[] plaintextData = cm.decryptBlock(data);
+                    fos.write(plaintextData);
+                    System.out.print("."); // Just for debug
+                }catch(Exception e){
+                    System.out.println("Error during decryption of block " + blockId);
+                    System.out.println("The file is corrupt or has been tampered with.");
+                    fos.close();
+                    new File(outputFileName).delete(); // Delete incomplete file
+                    return;
+                }
+
             }
         }
-	System.out.println();	
+	    System.out.println();	
         System.out.println("File reconstructed: retrieved_" + filename);
     }
 
-    private static void searchFiles(String keyword, DataOutputStream out, DataInputStream in) throws IOException {
-        out.writeUTF("SEARCH");
-        out.writeUTF(keyword.toLowerCase());
-        out.flush();
-        int count = in.readInt();
-        System.out.println();	
-        System.out.println("Search results:");
-        for (int i = 0; i < count; i++) {
-            System.out.println(" - " + in.readUTF());
+    private static void searchFiles(String keyword, DataOutputStream out, DataInputStream in, CryptoManager cm) throws IOException {
+        try{
+            String token = cm.generateDeterministicToken(keyword.toLowerCase());
+            out.writeUTF("SEARCH");
+            out.writeUTF(token);
+            out.flush();
+        }catch(Exception e){
+            System.out.println("Error generating search token.");
+            return;
+        }
+        System.out.println();
+        System.out.println("Search results for keyword '" + keyword + "':");
+        try{
+            int count = in.readInt();
+            if(count == 0){
+                System.out.println(" No files found with keyword '" + keyword + "'.");
+                return;
+            }
+
+            for (int i = 0; i < count; i++) {
+                int length = in.readInt();
+                byte[] encFileId = new byte[length];
+                in.readFully(encFileId);
+                try{
+                    byte[] fileIdbytes = cm.decryptConfidential(encFileId);
+                    String filename = new String(fileIdbytes, StandardCharsets.UTF_8);
+                    System.out.println(" - " + filename);
+                }catch(Exception e){
+                    System.out.println("Failed to decrypt one search result.");
+                    return;
+            
+                }
+            }
+        }catch(Exception e){
+            System.out.println("Error receiving search results from server.");
         }
     }
 
