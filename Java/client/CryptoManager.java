@@ -38,7 +38,8 @@ public class CryptoManager {
     private char[] pwd;
     private static final int GCM_IV_LENGTH = 12;    // 96 bits
     private static final int GCM_TAG_LENGTH = 16;   //128 bits
-    private final String KEY_DIR = "Java/client/KeyStore/"; //Diretoria para guardar a chave
+    // private final String KEY_DIR = "Java/client/KeyStore/"; //Diretoria para guardar a chave
+    private final String KEY_DIR = "KeyStore/"; //Diretoria para guardar a chave
     private static final int PBKDF2_ITERATIONS = 65536;
     private static final int PBKDF2_KEY_LENGTH = 256;
     private static final int SALT_LENGTH = 16;
@@ -74,7 +75,7 @@ public class CryptoManager {
         }
     }
     private void loadFile() throws IOException{
-        File crypto = new File("Java/client/cryptoconfig.txt");
+        File crypto = new File("cryptoconfig.txt");
             //Check
             if(!crypto.exists()){
                 throw new IOException("Crypto configuration file not found.");
@@ -202,7 +203,6 @@ public class CryptoManager {
         }
     
     }
-
     private void loadKeys(){
         
         if (sKey != null && (!hasHmac || (hasHmac && hmac != null))) {
@@ -246,6 +246,9 @@ public class CryptoManager {
                     hmac = originalKey;
                     hasHmac = true;
                     System.out.println("HMAC key loaded successfully from " + f.getName());
+                }else if(f.getName().endsWith("se.key")){
+                    seKey = originalKey;
+                    System.out.println("Searchable Encryption key loaded successfully from " + f.getName());
                 }
             }catch(Exception e){
                 System.err.println("Error loading key from file " + f.getName() + ": " + e.getMessage()); // Debug
@@ -262,7 +265,7 @@ public class CryptoManager {
 
 
     }
-    private byte[] encryptBlock(byte[] plaintext){
+    public byte[] encryptBlock(byte[] plaintext){
         byte[] cipherBlock = null;
         try{        
                 //loadKeys();// Load the keys and decrypt them so that we can now encrypt data with them
@@ -386,21 +389,24 @@ public class CryptoManager {
         return plainText;
     }
 
-    public Map<String, byte[]> generateSearchIndex(String fileId, List<String> keywords) throws Exception {
-        Map<String, byte[]> searchIndex = new HashMap<>();
+    public Map<String, List<byte[]>> generateSearchIndex(String fileId, List<String> keywords) throws Exception {
+        Map<String, List<byte[]>> searchIndex = new HashMap<>();
         //Check
         if(this.seKey == null){
             System.err.println("Searchable Encryption key not initialized. - CryptoManager");
         }
         byte[] fileIdBytes = fileId.getBytes(StandardCharsets.UTF_8);
         byte[] encryptedFileId = encryptConfidential(fileIdBytes);
+
+        List<byte[]> fileIdList = new java.util.ArrayList<>();
+        fileIdList.add(encryptedFileId);
+
         for(String keyword : keywords){
             String searchToken = generateDeterministicToken(keyword);
-            searchIndex.put(searchToken, encryptedFileId);
+            searchIndex.put(searchToken, fileIdList);
         }
         return searchIndex;
     }
-
     private String generateDeterministicToken(String keyword) throws Exception {
     // Usamos HMAC-SHA256 como uma PRF Determinística, chaveada pela seKey
     javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
@@ -412,7 +418,6 @@ public class CryptoManager {
     // Converte o token binário para Base64 para ser usado como chave String no Map
     return Base64.getEncoder().encodeToString(token); 
     }
-
     private byte[] encryptConfidential(byte[] plaintext) throws Exception {
     // Reutiliza a lógica robusta de AEAD (usando AES/GCM)
     

@@ -9,10 +9,10 @@ import java.util.*;
 public class BlockStorageServer {
     private static final int PORT = 5000;
     private static final String BLOCK_DIR = "blockstorage";
-    private static final String META_FILE = "metadata.ser";
+    private static final String META_FILE = "Secure_metadata.ser";
 
     // Map filename -> list of keywords
-    private static Map<String, List<String>> metadata = new HashMap<>();
+    private static Map<String, List<byte[]>> securemetadata = new HashMap<>();
 
     public static void main(String[] args) throws IOException {
         File dir = new File(BLOCK_DIR);
@@ -36,6 +36,9 @@ public class BlockStorageServer {
             String command;
             while ((command = in.readUTF()) != null) {
                 switch (command) {
+                    case "STORE_METADATA":
+                        storeMetadata(in, out);
+                        break;
                     case "STORE_BLOCK":
                         storeBlock(in, out);
                         break;
@@ -61,6 +64,30 @@ public class BlockStorageServer {
         }
     }
 
+    private static void storeMetadata(DataInputStream in, DataOutputStream out) throws IOException {
+        String fileId = in.readUTF();
+        int indexSize = in.readInt();
+        for(int i=0; i<indexSize; i++){
+            String token = in.readUTF();
+            int listSize = in.readInt();
+            for(int j=0; j<listSize; j++){
+                int valueLength = in.readInt();
+                byte[] encFileId = new byte[valueLength];
+                in.readFully(encFileId);
+
+                List<byte[]> existingList = securemetadata.get(token);
+                if(existingList == null){
+                    existingList = new ArrayList<>();
+                    securemetadata.put(token, existingList);
+                }
+                existingList.add(encFileId);
+            }
+        }
+        saveMetadata();
+        out.writeUTF("METADATA_OK");
+        out.flush();
+    }
+
     private static void storeBlock(DataInputStream in, DataOutputStream out) throws IOException {
         String blockId = in.readUTF();
         int length = in.readInt();
@@ -74,16 +101,16 @@ public class BlockStorageServer {
         }
 
         // Read optional metadata (keywords)
-        int keywordCount = in.readInt();
+        /* int keywordCount = in.readInt();
         if (keywordCount > 0) {
             List<String> keywords = new ArrayList<>();
             for (int i = 0; i < keywordCount; i++) {
                 keywords.add(in.readUTF().toLowerCase());
             }
-            metadata.put(blockId, keywords);
+            securemetadata.put(blockId, keywords);
             saveMetadata();
-        }
-
+        }*/ //Ignora keywords visto que o indice adicionado e suficiente
+        in.readInt(); // Read and ignore keyword count
         out.writeUTF("OK");
         out.flush();
     }
@@ -115,7 +142,7 @@ public class BlockStorageServer {
     private static void searchBlocks(DataInputStream in, DataOutputStream out) throws IOException {
         String keyword = in.readUTF().toLowerCase();
         List<String> results = new ArrayList<>();
-        for (Map.Entry<String, List<String>> entry : metadata.entrySet()) {
+        for (Map.Entry<String, List<byte[]>> entry : securemetadata.entrySet()) {
             if (entry.getValue().contains(keyword)) {
                 results.add(entry.getKey());
             }
@@ -127,7 +154,7 @@ public class BlockStorageServer {
 
     private static void saveMetadata() {
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(META_FILE))) {
-            oos.writeObject(metadata);
+            oos.writeObject(securemetadata);
         } catch (IOException e) {
             System.err.println("Error saving metadata: " + e.getMessage());
         }
@@ -137,7 +164,7 @@ public class BlockStorageServer {
         File f = new File(META_FILE);
         if (!f.exists()) return;
         try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(f))) {
-            metadata = (Map<String, List<String>>) ois.readObject();
+            securemetadata = (Map<String, List<byte[]>>) ois.readObject();
         } catch (IOException | ClassNotFoundException e) {
             System.err.println("Error loading metadata: " + e.getMessage());
         }

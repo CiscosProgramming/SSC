@@ -12,7 +12,11 @@ public class BlockStorageClient {
 
     public static void main(String[] args) throws IOException, ClassNotFoundException {
         loadIndex();
-
+        //
+        String clientId = "1904";
+        char[] password = "StrongPass123!".toCharArray();
+        CryptoManager cm = new CryptoManager(password, clientId);
+        //
         Socket socket = new Socket("localhost", PORT);
         try (
             DataInputStream in = new DataInputStream(socket.getInputStream());
@@ -22,11 +26,6 @@ public class BlockStorageClient {
             while (true) {
                 System.out.print("Command (PUT/GET/LIST/SEARCH/EXIT): ");
                 String cmd = scanner.nextLine().toUpperCase();
-                //
-                String clientId = "1904";
-                char[] password = "Benfica".toCharArray();
-                CryptoManager cryptoManager = new CryptoManager(password, clientId);
-                //
                 switch (cmd) {
                     case "PUT":
                         System.out.print("Enter local file path: ");
@@ -42,7 +41,7 @@ public class BlockStorageClient {
                         if (!kwLine.trim().isEmpty()) {
                             for (String kw : kwLine.split(",")) keywords.add(kw.trim().toLowerCase());
                         }
-                        putFile(file, keywords, out, in);
+                        putFile(file, keywords, out, in,cm);
                         saveIndex();
                         break;
 
@@ -79,27 +78,73 @@ public class BlockStorageClient {
         }
     }
 
-    private static void putFile(File file, List<String> keywords, DataOutputStream out, DataInputStream in) throws IOException {
+    private static void putFile(File file, List<String> keywords, DataOutputStream out, DataInputStream in, CryptoManager cm) throws IOException {
         List<String> blocks = new ArrayList<>();
+        String fileId = file.getName();
+        // Generate and store searchable encryption index
+        try{
+            Map<String, List<byte[]>> secureIndex = cm.generateSearchIndex(fileId, keywords);
+            System.out.println("Generated searchable encryption index for " + fileId + " with " + secureIndex.size() + " keyword entries.");
+            out.writeUTF("STORE_METADATA");
+            out.writeUTF(fileId);
+            out.writeInt(secureIndex.size());
+
+            for(Map.Entry<String, List<byte[]>> entry : secureIndex.entrySet()){
+                out.writeUTF(entry.getKey());
+                List <byte[]> fileIdList = entry.getValue();
+                out.writeInt(fileIdList.size());
+                
+                for(byte[] encFileId : fileIdList){
+                    out.writeInt(encFileId.length);
+                    out.write(encFileId);
+                }
+            }
+            out.flush();
+            String response = in.readUTF();
+            if(!response.equals("METADATA_OK")){
+                System.out.println("Error storing metadata index for file: " + fileId);
+                return;
+            }
+        }catch(Exception e){
+            System.out.println("Error for Searchable Encryption Index generation");
+        }
+
+        //Encrypt and store file blocks
         try (FileInputStream fis = new FileInputStream(file)) {
             byte[] buffer = new byte[BLOCK_SIZE];
             int bytesRead;
             int blockNum = 0;
+            System.out.println("Storing file blocks:");
             while ((bytesRead = fis.read(buffer)) != -1) {
-                byte[] blockData = Arrays.copyOf(buffer, bytesRead);
+                byte[] plaintextBlock = Arrays.copyOf(buffer, bytesRead);
                 String blockId = file.getName() + "_block_" + blockNum++;
-
+                
+                //Encrypt block data
+                byte[] encryptedBlockData = cm.encryptBlock(plaintextBlock);
+                if(encryptedBlockData == null){
+                    System.out.println("Encryption failed for block " + blockId);
+                    return;
+                }
                 out.writeUTF("STORE_BLOCK");
                 out.writeUTF(blockId);
-                out.writeInt(blockData.length);
-                out.write(blockData);
-		System.out.print("."); // Just for debug
-
+                out.writeInt(encryptedBlockData.length);
+                out.write(encryptedBlockData);
+                
+                out.writeInt(0); // no keywords sent only index
+                out.flush();
+                String response = in.readUTF();
+                if (!response.equals("OK")) {
+                    System.out.println("Error storing block: " + blockId);
+                    return;
+                }
+                blocks.add(blockId);
+                System.out.print("."); // Just for debug
+                /*
                 // Send keywords for first block only
                 if (blockNum == 1) {
                     out.writeInt(keywords.size());
                     for (String kw : keywords) out.writeUTF(kw);
-		System.out.println("/nSent keywords./n"); // Just for debug    
+		        System.out.println("/nSent keywords./n"); // Just for debug    
                 } else {
                     out.writeInt(0); // no keywords for other blocks
                 }
@@ -110,12 +155,12 @@ public class BlockStorageClient {
                     System.out.println("Error storing block: " + blockId);
                     return;
                 }
-                blocks.add(blockId);
+                blocks.add(blockId);  */
             }
         }
         fileIndex.put(file.getName(), blocks);
-	System.out.println();
-	System.out.println("File stored with " + blocks.size() + " blocks.");
+	    System.out.println();
+	    System.out.println("File stored with " + blocks.size() + " blocks.");
     }
 
     private static void getFile(String filename, DataOutputStream out, DataInputStream in) throws IOException {
