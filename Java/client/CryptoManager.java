@@ -35,29 +35,44 @@ public class CryptoManager {
     private final String KEY_DIR = "KeyStore/"; //Diretoria para guardar a chave
     private SecretKey seKey;
 
+    // No ficheiro: CryptoManager.java
+
     public CryptoManager(char[] pwd, String clienteId){
         this.clienteId = clienteId;
-        this.pwd = pwd;
+        // IMPORTANTE: Guardamos a password para usar em load/store
+        this.pwd = pwd; 
         secureRandom = new SecureRandom();
+        
         try {
-            loadFile();
-            File keyFile = new File(KEY_DIR + this.clienteId + "~" + algorithm +"~enc.key");//Verificar se a key ja existe
-            if(!keyFile.exists()){
-                createKey();
-                storeKey();
-            }else{
-                loadKeys();
-            }    
-        } catch (IOException | NoSuchAlgorithmException e) {
-            System.err.println("Error loading crypto configuration or creating key");
-        } finally {
-            //Limpar a password da memória por motivos de segurança
-            /* if (this.pwd != null) {
-                java.util.Arrays.fill(pwd, ' ');
-                pwd = null;
+            // 1. Carrega a configuração de algoritmos (ex: "AES GCM")
+            loadFile(); 
+            
+            // 2. TENTA carregar as chaves do ficheiro .jceks
+            //    Se o ficheiro existir, loadKeys() irá preencher sKey, hmac, etc.
+            loadKeys(); 
+
+            // 3. VERIFICA se as chaves foram carregadas
+            //    Se sKey (a chave principal) ainda for 'null', 
+            //    significa que o keystore não existia.
+            if (sKey == null) {
+                System.out.println("No existing keystore found. Generating new keys...");
+                
+                // 4. CRIA e GUARDA as novas chaves
+                createKey(); // Gera sKey, hmac, seKey na memória
+                storeKey();  // Guarda-as no ficheiro .jceks (usando this.pwd)
+            } else {
+                // O loadKeys() funcionou
+                // System.out.println("Existing keys loaded successfully."); // Opcional
             }
-            */
+
+        } catch (IOException | NoSuchAlgorithmException e) {
+            System.err.println("Error initializing CryptoManager: " + e.getMessage());
+            e.printStackTrace();
         }
+        
+        // A password (this.pwd) NÃO é limpa aqui.
+        // O chamador (cltest ou BlockStorageClient) é quem deve limpar
+        // a *sua* cópia original da password.
     }
     private void loadFile() throws IOException{
         File crypto = new File("cryptoconfig.txt");

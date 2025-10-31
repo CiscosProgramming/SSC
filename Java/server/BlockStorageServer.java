@@ -140,18 +140,52 @@ public class BlockStorageServer {
     }
 
     private static void searchBlocks(DataInputStream in, DataOutputStream out) throws IOException {
-        String token = in.readUTF();
-        List<byte[]> results = securemetadata.get(token);
-        if(results == null){
+        int ntokens = in.readInt();
+        if(ntokens <= 0){
             out.writeInt(0);
-        }else{
-            out.writeInt(results.size());
-            for(byte[] encFileId : results){
-                out.writeInt(encFileId.length);
-                out.write(encFileId);
+            out.flush();
+            return;
+        }
+        Set<String> resultSet = null;
+        for(int i=0; i<ntokens; i++){
+            String token = in.readUTF();
+            List<byte[]> tokenResults = securemetadata.get(token);
+
+            if(tokenResults == null){
+                out.writeInt(0);
+                out.flush();
+                return;
+            }
+            Set<String> currentSet = new HashSet<>();
+            for(byte[] fileId : tokenResults){
+                currentSet.add(Base64.getEncoder().encodeToString(fileId));
+            }
+
+            if(i==0){
+                resultSet = currentSet;
+            } else {
+                resultSet.retainAll(currentSet);
+            }
+
+            if(resultSet.isEmpty()){
+                out.writeInt(0);
+                out.flush();
+                return;
             }
         }
-        out.flush();
+
+        if(resultSet == null || resultSet.isEmpty()){
+            out.writeInt(0);
+            out.flush();
+            return;
+        }
+        out.writeInt(resultSet.size());
+        for(String fileId : resultSet){
+            byte[] decoded = Base64.getDecoder().decode(fileId);
+            out.writeInt(decoded.length);
+            out.write(decoded);
+        }
+
     }
 
     private static void saveMetadata() {

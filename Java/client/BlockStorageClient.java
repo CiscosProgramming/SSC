@@ -64,7 +64,15 @@ public class BlockStorageClient {
                     case "SEARCH":
                         System.out.print("Enter keyword to search: ");
                         String keyword = scanner.nextLine();
-                        searchFiles(keyword, out, in, cm);
+                        List<String> kList = new ArrayList<>();
+                        if(!keyword.trim().isEmpty()){
+                            for(String kw : keyword.split(",")) kList.add(kw.trim().toLowerCase());
+                        }
+                        if (kList.isEmpty()) {
+                            System.out.println("No keywords provided for search.");
+                            break;
+                        }
+                        searchFiles(kList, out, in, cm);
                         break;
 
                     case "EXIT":
@@ -213,11 +221,17 @@ public class BlockStorageClient {
         System.out.println("File reconstructed: retrieved_" + filename);
     }
 
-    private static void searchFiles(String keyword, DataOutputStream out, DataInputStream in, CryptoManager cm) throws IOException {
+    private static void searchFiles(List<String> keyword, DataOutputStream out, DataInputStream in, CryptoManager cm) throws IOException {
         try{
-            String token = cm.generateDeterministicToken(keyword.toLowerCase());
+            List<String> token = new ArrayList<>(); 
+            for(String kw : keyword){
+                token.add(cm.generateDeterministicToken(kw.toLowerCase()));    
+            }
             out.writeUTF("SEARCH");
-            out.writeUTF(token);
+            out.writeInt(token.size());
+            for(String t : token){
+                out.writeUTF(t);
+            }
             out.flush();
         }catch(Exception e){
             System.out.println("Error generating search token.");
