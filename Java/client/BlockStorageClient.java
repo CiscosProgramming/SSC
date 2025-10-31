@@ -94,10 +94,7 @@ public class BlockStorageClient {
     private static void putFile(File file, List<String> keywords, DataOutputStream out, DataInputStream in, CryptoManager cm) throws IOException {
         List<String> blocks = new ArrayList<>();
         String fileId = file.getName();
-
-        // --- ALTERAÇÃO: Adicionado try-catch para NoSuchAlgorithmException ---
         try {
-            // Generate and store searchable encryption index (Esta parte não muda)
             try{
                 Map<String, List<byte[]>> secureIndex = cm.generateSearchIndex(fileId, keywords);
                 System.out.println("Generated searchable encryption index for " + fileId + " with " + secureIndex.size() + " keyword entries.");
@@ -124,47 +121,35 @@ public class BlockStorageClient {
             }catch(Exception e){
                 System.out.println("Error for Searchable Encryption Index generation");
             }
-
-            //Encrypt and store file blocks
             try (FileInputStream fis = new FileInputStream(file)) {
                 byte[] buffer = new byte[BLOCK_SIZE];
                 int bytesRead;
-                // int blockNum = 0; // <-- Já não é necessário
-
-                // --- ALTERAÇÃO: Inicializar o MessageDigest fora do loop ---
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 
                 System.out.println("Storing file blocks:");
                 while ((bytesRead = fis.read(buffer)) != -1) {
                     byte[] plaintextBlock = Arrays.copyOf(buffer, bytesRead);
-                    
-                    // --- ALTERAÇÃO PRINCIPAL: O blockId é o HASH do plaintext ---
-                    // String blockId = file.getName() + "_block_" + blockNum++; // <-- Linha antiga removida
-                    
-                    byte[] hash = digest.digest(plaintextBlock); // 1. Calcular o hash do plaintext
-                    String blockId = bytesToHex(hash);          // 2. Converter para String Hex
-                    // --- FIM DA ALTERAÇÃO ---
-
-                    //Encrypt block data
-                    byte[] encryptedBlockData = cm.encryptBlock(plaintextBlock); // 3. Encriptar o plaintext
+                    byte[] hash = digest.digest(plaintextBlock);
+                    String blockId = bytesToHex(hash);
+                    byte[] encryptedBlockData = cm.encryptBlock(plaintextBlock);
                     if(encryptedBlockData == null){
                         System.out.println("Encryption failed for block " + blockId);
                         return;
                     }
                     
                     out.writeUTF("STORE_BLOCK");
-                    out.writeUTF(blockId); // 4. Enviar o HASH (blockId)
+                    out.writeUTF(blockId); 
                     out.writeInt(encryptedBlockData.length);
-                    out.write(encryptedBlockData); // 5. Enviar o bloco ENCRIPTADO
+                    out.write(encryptedBlockData);
                     
-                    out.writeInt(0); // no keywords sent only index
+                    out.writeInt(0); 
                     out.flush();
                     String response = in.readUTF();
                     if (!response.equals("OK")) {
                         System.out.println("Error storing block: " + blockId);
                         return;
                     }
-                    blocks.add(blockId); // 6. Adicionar o HASH ao índice local
+                    blocks.add(blockId); 
                     System.out.print(".");
                 }
             }
@@ -172,7 +157,7 @@ public class BlockStorageClient {
             System.out.println();
             System.out.println("File stored with " + blocks.size() + " blocks.");
         
-        // --- ALTERAÇÃO: Lidar com o erro de SHA-256 não existir ---
+       
         } catch (NoSuchAlgorithmException e) {
             System.err.println("Erro crítico: Algoritmo SHA-256 não encontrado. O PUT falhou.");
             e.printStackTrace();
@@ -197,7 +182,7 @@ public class BlockStorageClient {
                 if (length == -1) {
                     System.out.println("Block not found: " + blockId);
                     fos.close();
-                    new File(outputFileName).delete(); // Delete incomplete file
+                    new File(outputFileName).delete();
                     return;
                 }
                 byte[] data = new byte[length];
@@ -206,12 +191,12 @@ public class BlockStorageClient {
                 try{
                     byte[] plaintextData = cm.decryptBlock(data);
                     fos.write(plaintextData);
-                    System.out.print("."); // Just for debug
+                    System.out.print(".");
                 }catch(Exception e){
                     System.out.println("Error during decryption of block " + blockId);
                     System.out.println("The file is corrupt or has been tampered with.");
                     fos.close();
-                    new File(outputFileName).delete(); // Delete incomplete file
+                    new File(outputFileName).delete();
                     return;
                 }
 

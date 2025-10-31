@@ -5,19 +5,19 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets; // Para codificação/decodificação Base64
+import java.nio.charset.StandardCharsets; 
 import java.security.KeyStore;
 import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;     // Para geração segura de números aleatórios (essencial para KeyGenerator)
-import java.util.Base64;               // Para codificar a chave em Base64 antes de guardar
+import java.security.SecureRandom;    
+import java.util.Base64;              
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.crypto.Cipher;
-import javax.crypto.KeyGenerator; //Gerar key
+import javax.crypto.KeyGenerator; 
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.SecretKey; //Representar chave secreta
+import javax.crypto.SecretKey; 
 
 
 public class CryptoManager {
@@ -25,17 +25,15 @@ public class CryptoManager {
     private int key;
     private String algorithm;
     private SecureRandom secureRandom;
-    private SecretKey sKey; //Encryption
-    private SecretKey hmac; //Authentication
+    private SecretKey sKey; 
+    private SecretKey hmac; 
     private boolean hasHmac = false;
-    private String clienteId; //ID do cliente para identificar a key
+    private String clienteId;
     private char[] pwd;
-    private static final int GCM_IV_LENGTH = 12;    // 96 bits
-    private static final int GCM_TAG_LENGTH = 16;   //128 bits
-    private final String KEY_DIR = "KeyStore/"; //Diretoria para guardar a chave
+    private static final int GCM_IV_LENGTH = 12;    
+    private static final int GCM_TAG_LENGTH = 16;   
+    private final String KEY_DIR = "KeyStore/"; 
     private SecretKey seKey;
-
-    // No ficheiro: CryptoManager.java
 
     public CryptoManager(char[] pwd, String clienteId){
         this.clienteId = clienteId;
