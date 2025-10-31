@@ -1,29 +1,23 @@
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets; // Para codificação/decodificação Base64
+import java.security.KeyStore;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;     // Para geração segura de números aleatórios (essencial para KeyGenerator)
 import java.util.Base64;               // Para codificar a chave em Base64 antes de guardar
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.nio.file.Files;             // Para ler/escrever o ficheiro da chave (operação simples)
-import java.nio.file.Paths;         // Para utilitário de caminhos de ficheiro
-
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator; //Gerar key
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.PBEKeySpec;
-import javax.crypto.spec.SecretKeySpec; //converter byte[] em SecretKey
 import javax.crypto.SecretKey; //Representar chave secreta
-
-import java.security.spec.KeySpec;
-import java.security.spec.InvalidKeySpecException;
-import javax.crypto.SecretKeyFactory;
 
 
 public class CryptoManager {
@@ -38,17 +32,8 @@ public class CryptoManager {
     private char[] pwd;
     private static final int GCM_IV_LENGTH = 12;    // 96 bits
     private static final int GCM_TAG_LENGTH = 16;   //128 bits
-    // private final String KEY_DIR = "Java/client/KeyStore/"; //Diretoria para guardar a chave
     private final String KEY_DIR = "KeyStore/"; //Diretoria para guardar a chave
-    private static final int PBKDF2_ITERATIONS = 65536;
-    private static final int PBKDF2_KEY_LENGTH = 256;
-    private static final int SALT_LENGTH = 16;
     private SecretKey seKey;
-
-    
-    //Criar palavra passe para gerar uma master key que desencripta as outras keys em KeyStore
-    // A palavra passe e fornecida pelo utilizador na inicialização do cliente
-    // tera que ser sempre a mesma caso contrario a master key calculada sera diferente e as keys nao poderao ser desencriptadas
 
     public CryptoManager(char[] pwd, String clienteId){
         this.clienteId = clienteId;
@@ -138,133 +123,83 @@ public class CryptoManager {
         this.seKey = SeK.generateKey();
         System.out.println("Generated Searchable Encryption key of size 256 bits.");
     }
-    private SecretKey getMKey(byte[] salt) throws NoSuchAlgorithmException, InvalidKeySpecException {
-        KeySpec spec = new PBEKeySpec(this.pwd, salt, PBKDF2_ITERATIONS, PBKDF2_KEY_LENGTH);
-        SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
-        return factory.generateSecret(spec);
-    }
-    private byte[] encryptMasterKey(SecretKey masterKey, SecretKey kek, byte[] iv) throws Exception {
-        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv); // Tag em bits
-        // Inicializa a cifra com a KEK (Chave de Proteção)
-        cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(kek.getEncoded(), "AES"), gcmSpec);
-        // O doFinal() em GCM produz o Ciphertext e anexa a Tag de Autenticação (16B)
-        byte[] encryptedMasterKeyWithTag = cipher.doFinal(masterKey.getEncoded());
-        // Empacota o IV e o resultado (Ciphertext + Tag)
-        ByteBuffer byteBuffer = ByteBuffer.allocate(iv.length + encryptedMasterKeyWithTag.length);
-        byteBuffer.put(iv);
-        byteBuffer.put(encryptedMasterKeyWithTag);
-        return byteBuffer.array();
-    }
-    private void protectKey(byte[] salt, byte[] encryptMasterKeyWithIv, String filename) throws IOException {
-        ByteBuffer byteBuffer = ByteBuffer.allocate(salt.length + encryptMasterKeyWithIv.length);
-        byteBuffer.put(salt);
-        byteBuffer.put(encryptMasterKeyWithIv);
-        String encodedData = Base64.getEncoder().encodeToString(byteBuffer.array());
-        Files.write(Paths.get(filename), encodedData.getBytes(StandardCharsets.UTF_8));
-    }
     private void storeKey(){
+        String keystore = KEY_DIR + this.clienteId + ".jceks";
         try{
-            //Gerar salt
-            byte[] salt = new byte[SALT_LENGTH];
-            secureRandom.nextBytes(salt);
-            //KEK
-            SecretKey kek = getMKey(salt);
-            String KeyFileEnc = KEY_DIR + this.clienteId + "~" + algorithm + "~enc.key"; 
-            String KeyFileAuth = KEY_DIR + this.clienteId + "~" + algorithm + "~auth.key";
-            String KeyFileSe = KEY_DIR + this.clienteId + "~" + algorithm + "~se.key";
-            //Guardar chave de encriptação
-            byte[] iv = new byte[GCM_IV_LENGTH];
-            secureRandom.nextBytes(iv);
-            byte[] encryptedData = encryptMasterKey(sKey, kek, iv);
-            protectKey(salt, encryptedData, KeyFileEnc);
-            System.out.println("Encryption key stored successfully in " + KeyFileEnc);
-            //Guardar chave de pesquisa segura
+            KeyStore ks = KeyStore.getInstance("JCEKS");
+            ks.load(null, this.pwd);
+            KeyStore.ProtectionParameter pparam = new KeyStore.PasswordProtection(pwd);
+            
+            KeyStore.SecretKeyEntry skEntry = new KeyStore.SecretKeyEntry(sKey);
+            ks.setEntry("enc_key", skEntry, pparam);
+
             if(this.seKey != null){
-                byte[] iv_se = new byte[GCM_IV_LENGTH];
-                secureRandom.nextBytes(iv_se);
-                byte[] encryptedDataSe = encryptMasterKey(this.seKey, kek, iv_se);
-                protectKey(salt, encryptedDataSe, KeyFileSe);
-                System.out.println("Searchable Encryption key stored successfully in " + KeyFileSe);
+                KeyStore.SecretKeyEntry seEntry = new KeyStore.SecretKeyEntry(seKey);
+                ks.setEntry("se_key", seEntry, pparam);
             }
 
-
-
-            //Guardar chave de autenticação se existir
-            if(hasHmac){
-                byte[] iv_hmac = new byte[GCM_IV_LENGTH];
-                secureRandom.nextBytes(iv_hmac);
-                byte[] encryptedDataAuth = encryptMasterKey(hmac, kek, iv_hmac);
-                protectKey(salt, encryptedDataAuth, KeyFileAuth);
-                System.out.println("HMAC key stored successfully in " + KeyFileAuth);
+            if(hasHmac && hmac != null){
+                KeyStore.SecretKeyEntry hmacEntry = new KeyStore.SecretKeyEntry(hmac);
+                ks.setEntry("auth_key", hmacEntry, pparam);
             }
+            
+            try(FileOutputStream fos = new FileOutputStream(keystore)){
+                ks.store(fos, pwd);
+            }
+            System.out.println("Keys stored successfully in client Keystore " + clienteId);
         }catch(Exception e){
-            System.err.println("Error storing keys: " + e.getMessage());
+            System.err.println("Error storing keys in client Keystore");
         }
-    
     }
     private void loadKeys(){
-        
         if (sKey != null && (!hasHmac || (hasHmac && hmac != null))) {
-        // Both keys are already in memory, no need to re-load
-        return;
-    }
-        
-        
-        File dir = new File(KEY_DIR);
-        File[] files = dir.listFiles((d, name) -> name.startsWith(this.clienteId));
-        
-        if (!dir.exists() || !dir.isDirectory()) {
-        System.err.println("[ERROR] Key directory not found: " + dir.getAbsolutePath());
         return;
         }
-        
-        //Check
-        if (files == null || files.length == 0) {
-            System.err.println("No key files found for client ID: " + this.clienteId);
+        String keystore = KEY_DIR + this.clienteId + ".jceks";
+        File ksFile = new File(keystore);
+
+        if(!ksFile.exists()){
+            System.err.println("[ERROR] Keystore file not found: " + keystore);
             return;
         }
-        for(File f : files ){
-            try{
-                byte[] encodedKeyData = Files.readAllBytes(f.toPath());
-                byte[] decodedKeyData = Base64.getDecoder().decode(encodedKeyData);
-                ByteBuffer byteBuffer = ByteBuffer.wrap(decodedKeyData);
-                byte[] salt = new byte[SALT_LENGTH];
-                byteBuffer.get(salt);
-                SecretKey kek = getMKey(salt); //derives KEK from password and salt
-                byte[] iv = new byte[GCM_IV_LENGTH];
-                byteBuffer.get(iv);
-                byte[] encryptedKeyWithTag = new byte[byteBuffer.remaining()];
-                byteBuffer.get(encryptedKeyWithTag);
-                SecretKey originalKey = decryptMasterKey(encryptedKeyWithTag, kek, iv);
 
-                //Key assignment
-                if(f.getName().endsWith("enc.key")){
-                    sKey = originalKey;
-                    System.out.println("Encryption key loaded successfully from " + f.getName());
-                }else if(f.getName().endsWith("auth.key")){
-                    hmac = originalKey;
-                    hasHmac = true;
-                    System.out.println("HMAC key loaded successfully from " + f.getName());
-                }else if(f.getName().endsWith("se.key")){
-                    seKey = originalKey;
-                    System.out.println("Searchable Encryption key loaded successfully from " + f.getName());
-                }
-            }catch(Exception e){
-                System.err.println("Error loading key from file " + f.getName() + ": " + e.getMessage()); // Debug
+        try{
+            KeyStore ks = KeyStore.getInstance("JCEKS");
+            try(FileInputStream fis = new FileInputStream(ksFile)){
+                ks.load(fis, this.pwd);
+            }
+            KeyStore.ProtectionParameter pparam = new KeyStore.PasswordProtection(pwd);
+            
+            KeyStore.SecretKeyEntry encEntry = (KeyStore.SecretKeyEntry) ks.getEntry("enc_key", pparam);
+            if(encEntry != null){
+                sKey = encEntry.getSecretKey();
+                System.out.println("Encryption key loaded successfully from client Keystore.");
+            }
+
+            KeyStore.SecretKeyEntry seEntry = (KeyStore.SecretKeyEntry) ks.getEntry("se_key", pparam);
+            if(seEntry != null){
+                seKey = seEntry.getSecretKey();
+                System.out.println("Searchable Encryption key loaded successfully from client Keystore.");
+            }
+
+            KeyStore.SecretKeyEntry hmacEntry = (KeyStore.SecretKeyEntry) ks.getEntry("auth_key", pparam);
+            if(hmacEntry != null){
+                hmac = hmacEntry.getSecretKey();
+                hasHmac = true;
+                System.out.println("HMAC key loaded successfully from client Keystore.");
+            }
+
+
+        }catch(java.io.IOException e){
+            if(e.getCause() instanceof javax.crypto.BadPaddingException){
+                System.err.println("[ERROR] Invalid password for Keystore decryption.");
+            }else{
+                System.err.println("Error loading keys from client Keystore: " + e.getMessage());
+            }
+        }catch(Exception e){
+                System.err.println("Error reading JCEKS keystore"); // Debug
             }
         }
-    }
-    private SecretKey decryptMasterKey(byte[] encryptedKeyWithTag, SecretKey kek, byte[] iv) throws Exception {
-        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv); // Tag em bits
-        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(kek.getEncoded(), "AES"), gcmSpec);
-        byte[] decryptedKeyBytes = cipher.doFinal(encryptedKeyWithTag);
-        return new SecretKeySpec(decryptedKeyBytes, "AES");
-
-
-
-    }
     public byte[] encryptBlock(byte[] plaintext){
         byte[] cipherBlock = null;
         try{        
@@ -388,7 +323,6 @@ public class CryptoManager {
         }
         return plainText;
     }
-
     public Map<String, List<byte[]>> generateSearchIndex(String fileId, List<String> keywords) throws Exception {
         Map<String, List<byte[]>> searchIndex = new HashMap<>();
         //Check
@@ -452,62 +386,4 @@ public class CryptoManager {
         cipher.init(Cipher.DECRYPT_MODE, sKey, gcmSpec);
         return cipher.doFinal(cipherText);
     }
-
-
-    /* 
-    private String encryptString (String plaintext, SecretKeySpec kek) throws Exception{
-        byte[] iv = new byte[GCM_IV_LENGTH];
-        secureRandom.nextBytes(iv);
-        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv);
-        cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(kek.getEncoded(),"AES"), gcmSpec);
-        byte[] cipherText = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
-        ByteBuffer byteBuffer = ByteBuffer.allocate(iv.length + cipherText.length);
-        byteBuffer.put(iv);
-        byteBuffer.put(cipherText);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(byteBuffer.array());
-    }
-    private String decryptString (String ciphertext, SecretKeySpec kek) throws Exception{
-        byte[] decodedData = Base64.getUrlDecoder().decode(ciphertext);
-        ByteBuffer byteBuffer = ByteBuffer.wrap(decodedData);
-        byte[] iv = new byte[GCM_IV_LENGTH];
-        byteBuffer.get(iv);
-        byte[] cipherText = new byte[byteBuffer.remaining()];
-        byteBuffer.get(cipherText);
-        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, iv);
-        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(kek.getEncoded(),"AES"), gcmSpec);
-        byte[] plainText = cipher.doFinal(cipherText);
-        return new String(plainText, StandardCharsets.UTF_8);
-    }
-    */
-
-    public static void main(String[] args) {
-    try {
-        // Password used for key encryption/decryption
-        char[] password = "StrongPass123!".toCharArray();
-
-        // Create CryptoManager for client ID "1904"
-        CryptoManager cm = new CryptoManager(password, "1904");
-
-        // ---- Test Key Loading ----
-        System.out.println("\n[TEST] Loading keys from KeyStore...");
-        cm.loadKeys();  // This should print success messages for enc/hmac keys
-
-        // ---- Test Encryption ----
-        String message = "Hello from the CryptoManager!";
-        System.out.println("[TEST] Encrypting message: " + message);
-        byte[] encrypted = cm.encryptBlock(message.getBytes(StandardCharsets.UTF_8));
-
-        if (encrypted != null) {
-            System.out.println("[RESULT] Ciphertext (Base64): " + Base64.getEncoder().encodeToString(encrypted));
-        } else {
-            System.err.println("[ERROR] Encryption failed!");
-        }
-
-    } catch (Exception e) {
-        e.printStackTrace();
-    }
-}
-
 }
