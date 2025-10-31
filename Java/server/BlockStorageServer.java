@@ -65,7 +65,7 @@ public class BlockStorageServer {
     }
 
     private static void storeMetadata(DataInputStream in, DataOutputStream out) throws IOException {
-        String fileId = in.readUTF();
+        // String fileId = in.readUTF(); nao e utilizado com a nova versao
         int indexSize = in.readInt();
         for(int i=0; i<indexSize; i++){
             String token = in.readUTF();
